@@ -81,8 +81,11 @@ if uploaded_file and destino_txt and st.button("Simular"):
         else:
             faltando.append(row["COLABORADOR"])
 
+    # Corrige erro do join: converte todos para string e ignora NaN
     if faltando:
-        st.warning(f"Colaboradores sem coordenadas válidas: {', '.join(faltando)}")
+        nomes_invalidos = [str(x) for x in faltando if pd.notna(x)]
+        if nomes_invalidos:
+            st.warning("Colaboradores sem coordenadas válidas: " + ", ".join(nomes_invalidos))
 
     try:
         destino = [float(x.strip()) for x in destino_txt.split(",")]
@@ -104,6 +107,7 @@ if uploaded_file and destino_txt and st.button("Simular"):
         for p in rota["pontos"]:
             folium.Marker(p["coord"], popup=p["nome"]).add_to(m)
     st_folium(m, width=700, height=500)
+
 
 
 
