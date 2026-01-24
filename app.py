@@ -4,9 +4,8 @@ from streamlit_folium import st_folium
 import json, requests
 from shapely.geometry import Point, shape
 from math import sqrt
-import streamlit as st
 
-# Configuração Gemini
+# Configuração Gemini (use st.secrets no Streamlit Cloud)
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
@@ -26,7 +25,8 @@ def bairro_de_ponto(coord):
             return b["nome"]
     return "DESCONHECIDO"
 
-def dist(a, b): return sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
+def dist(a, b): 
+    return sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
 
 def criar_rotas(pontos, destino, capacidade):
     minimo = CAP_MIN[capacidade]
@@ -42,10 +42,13 @@ def criar_rotas(pontos, destino, capacidade):
         start["usado"] = True
         while True:
             livres = [p for p in pontos if not p["usado"]]
-            if not livres or len(rota["pontos"]) >= capacidade: break
+            if not livres or len(rota["pontos"]) >= capacidade: 
+                break
             melhor = min(livres, key=lambda p: dist(rota["pontos"][-1]["coord"], p["coord"]))
-            rota["pontos"].append(melhor); melhor["usado"] = True
-        rotas.append(rota); rota_id += 1
+            rota["pontos"].append(melhor)
+            melhor["usado"] = True
+        rotas.append(rota)
+        rota_id += 1
     return rotas
 
 def chamar_gemini(pontos, capacidade, destino, rotas_algoritmo):
@@ -58,17 +61,20 @@ def chamar_gemini(pontos, capacidade, destino, rotas_algoritmo):
     Sugira melhorias ou confirme se estão adequadas.
     """
     body = {"contents": [{"parts": [{"text": prompt}]}]}
-    res = requests.post(GEMINI_URL,
+    res = requests.post(
+        GEMINI_URL,
         headers={"X-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
-        json=body)
+        json=body
+    )
     data = res.json()
     try:
-       if "candidates" in data and len(data["candidates"]) > 0:
-    parts = data["candidates"][0].get("content", {}).get("parts", [])
-    if parts and "text" in parts[0]:
-        return parts[0]["text"]
-return f"Erro na resposta do Gemini: {data}"
-
+        if "candidates" in data and len(data["candidates"]) > 0:
+            parts = data["candidates"][0].get("content", {}).get("parts", [])
+            if parts and "text" in parts[0]:
+                return parts[0]["text"]
+        return f"Erro na resposta do Gemini: {data}"
+    except Exception as e:
+        return f"Exceção ao processar resposta do Gemini: {e} | Dados: {data}"
 
 # ---------------- UI ----------------
 st.title("RotaSmart AI 🚐")
@@ -85,7 +91,9 @@ if st.button("Simular"):
     destino = [float(x) for x in destino_txt.split(",")]
     rotas = criar_rotas(pontos, destino, capacidade)
     for r in rotas:
-        for p in r["pontos"]: p.pop("usado", None)
+        for p in r["pontos"]: 
+            p.pop("usado", None)
+
     analise = chamar_gemini(pontos, capacidade, destino, rotas)
 
     st.subheader("Análise Gemini")
@@ -100,5 +108,6 @@ if st.button("Simular"):
         for p in rota["pontos"]:
             folium.Marker(p["coord"], popup=p["nome"]).add_to(m)
     st_folium(m, width=700, height=500)
+
 
 
