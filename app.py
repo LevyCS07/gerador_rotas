@@ -1,16 +1,14 @@
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
-import json, requests
+import json
 from shapely.geometry import Point, shape
 from math import sqrt
+from pathlib import Path
 
-# Configuração Gemini (use st.secrets no Streamlit Cloud)
-GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-
-# Carregar bairros
-with open("BAIRROS_MANAUS.geojson", encoding="utf-8") as f:
+# Carregar bairros (usando caminho relativo seguro)
+geojson_path = Path(__file__).parent / "BAIRROS_MANAUS.geojson"
+with open(geojson_path, encoding="utf-8") as f:
     bairros_geo = json.load(f)
 
 BAIRROS = [{"nome": feat["properties"].get("NOME") or feat["properties"].get("bairro"),
@@ -51,31 +49,6 @@ def criar_rotas(pontos, destino, capacidade):
         rota_id += 1
     return rotas
 
-def chamar_gemini(pontos, capacidade, destino, rotas_algoritmo):
-    prompt = f"""
-    Você é um planejador de rotas. Avalie as rotas calculadas pelo algoritmo:
-    Rotas: {rotas_algoritmo}
-    Pontos: {pontos}
-    Capacidade: {capacidade}
-    Destino: {destino}
-    Sugira melhorias ou confirme se estão adequadas.
-    """
-    body = {"contents": [{"parts": [{"text": prompt}]}]}
-    res = requests.post(
-        GEMINI_URL,
-        headers={"X-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
-        json=body
-    )
-    data = res.json()
-    try:
-        if "candidates" in data and len(data["candidates"]) > 0:
-            parts = data["candidates"][0].get("content", {}).get("parts", [])
-            if parts and "text" in parts[0]:
-                return parts[0]["text"]
-        return f"Erro na resposta do Gemini: {data}"
-    except Exception as e:
-        return f"Exceção ao processar resposta do Gemini: {e} | Dados: {data}"
-
 # ---------------- UI ----------------
 st.title("RotaSmart AI 🚐")
 pontos_txt = st.text_area("Colaboradores (COLAB;LAT;LON)")
@@ -94,11 +67,6 @@ if st.button("Simular"):
         for p in r["pontos"]: 
             p.pop("usado", None)
 
-    analise = chamar_gemini(pontos, capacidade, destino, rotas)
-
-    st.subheader("Análise Gemini")
-    st.write(analise)
-
     st.subheader("Mapa das Rotas")
     m = folium.Map(location=destino, zoom_start=12)
     colors = ["red","blue","green","purple","orange","brown","pink","cyan"]
@@ -108,6 +76,7 @@ if st.button("Simular"):
         for p in rota["pontos"]:
             folium.Marker(p["coord"], popup=p["nome"]).add_to(m)
     st_folium(m, width=700, height=500)
+
 
 
 
