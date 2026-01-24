@@ -1,116 +1,95 @@
 import streamlit as st
 import pandas as pd
-import openrouteservice
-from lxml import etree
 import folium
 from streamlit_folium import st_folium
-import io
+import json
+from shapely.geometry import Point, shape
+from math import sqrt
+from pathlib import Path
 
-# === CONFIGURAÇÕES ===
-ORS_API_KEY = st.secrets["ORS_API_KEY"]
+# Carregar bairros (usando caminho relativo seguro)
+geojson_path = Path(__file__).parent / "BAIRROS_MANAUS.geojson"
+with open(geojson_path, encoding="utf-8") as f:
+    bairros_geo = json.load(f)
 
-st.title("🚗 Gerador de Rotas KML")
+BAIRROS = [{"nome": feat["properties"].get("NOME") or feat["properties"].get("bairro"),
+            "shape": shape(feat["geometry"])} for feat in bairros_geo["features"]]
 
-# Upload da planilha
+CAP_MIN = {15: 11, 22: 16, 32: 23, 44: 32}
+
+def bairro_de_ponto(coord):
+    p = Point(coord[1], coord[0])
+    for b in BAIRROS:
+        if b["shape"].contains(p):
+            return b["nome"]
+    return "DESCONHECIDO"
+
+def dist(a, b): 
+    return sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
+
+def criar_rotas(pontos, destino, capacidade):
+    minimo = CAP_MIN[capacidade]
+    for p in pontos:
+        p["bairro"] = bairro_de_ponto(p["coord"])
+        p["usado"] = False
+    rotas, rota_id = [], 1
+    while any(not p["usado"] for p in pontos):
+        candidatos = [p for p in pontos if not p["usado"]]
+        start = max(candidatos, key=lambda p: dist(p["coord"], destino))
+        rota = {"id": f"Rota {rota_id}", "pontos": [start], "destino": destino,
+                "capacidade": capacidade, "bairro_base": start["bairro"]}
+        start["usado"] = True
+        while True:
+            livres = [p for p in pontos if not p["usado"]]
+            if not livres or len(rota["pontos"]) >= capacidade: 
+                break
+            melhor = min(livres, key=lambda p: dist(rota["pontos"][-1]["coord"], p["coord"]))
+            rota["pontos"].append(melhor)
+            melhor["usado"] = True
+        rotas.append(rota)
+        rota_id += 1
+    return rotas
+
+# ---------------- UI ----------------
+st.title("RotaSmart AI 🚐")
+
 uploaded_file = st.file_uploader("Envie sua planilha LISTA.xlsx", type=["xlsx"])
+capacidade = st.selectbox("Capacidade", [15,22,32,44])
+destino_txt = st.text_input("Destino (LAT,LON)")
 
-# Mapa inicial
-m = folium.Map(location=[-3.119, -60.021], zoom_start=12)
-st.write("Clique no mapa para escolher o destino final")
-map_data = st_folium(m, height=400, width=700)
-
-destino_final = None
-if map_data and map_data["last_clicked"]:
-    destino_final = (
-        map_data["last_clicked"]["lat"],
-        map_data["last_clicked"]["lng"]
-    )
-    st.success(f"Destino selecionado: {destino_final}")
-
-# Botão para gerar rotas
-if uploaded_file and destino_final and st.button("GERAR ROTAS"):
+if uploaded_file and destino_txt and st.button("Simular"):
     try:
         df = pd.read_excel(uploaded_file, sheet_name="BD")
     except Exception as e:
         st.error(f"Erro ao ler planilha: {e}")
         st.stop()
 
-    if not {"ROTA","LAT","LONG","COLABORADOR"}.issubset(df.columns):
-        st.error("A planilha precisa ter as colunas: ROTA, LAT, LONG, COLABORADOR")
+    # Verifica se as colunas necessárias existem
+    if not {"COLABORADOR","LAT","LONG"}.issubset(df.columns):
+        st.error("A planilha precisa ter as colunas: COLABORADOR, LAT, LONG")
         st.stop()
 
-    grupos = df.groupby("ROTA")
-    client = openrouteservice.Client(key=ORS_API_KEY)
+    # Converte os dados em lista de pontos
+    pontos = []
+    for _, row in df.iterrows():
+        pontos.append({"nome": row["COLABORADOR"], "coord": [float(row["LAT"]), float(row["LONG"])]})
 
-    for rota_nome, grupo in grupos:
-        pontos = [[row['LONG'], row['LAT']] for _, row in grupo.iterrows()]
-        pontos.append([destino_final[1], destino_final[0]])
+    destino = [float(x) for x in destino_txt.split(",")]
+    rotas = criar_rotas(pontos, destino, capacidade)
+    for r in rotas:
+        for p in r["pontos"]: 
+            p.pop("usado", None)
 
-        try:
-            resultado = client.directions(
-                coordinates=pontos,
-                profile='driving-car',
-                optimize_waypoints=True,
-                format='geojson'
-            )
-        except Exception as e:
-            st.error(f"Erro na rota {rota_nome}: {e}")
-            continue
+    st.subheader("Mapa das Rotas")
+    m = folium.Map(location=destino, zoom_start=12)
+    colors = ["red","blue","green","purple","orange","brown","pink","cyan"]
+    for idx, rota in enumerate(rotas):
+        coords = [p["coord"] for p in rota["pontos"]] + [rota["destino"]]
+        folium.PolyLine(coords, color=colors[idx%len(colors)], weight=4).add_to(m)
+        for p in rota["pontos"]:
+            folium.Marker(p["coord"], popup=p["nome"]).add_to(m)
+    st_folium(m, width=700, height=500)
 
-        # Adicionar rota no mapa
-        coords = resultado['features'][0]['geometry']['coordinates']
-        folium.PolyLine([(c[1], c[0]) for c in coords], color="blue", weight=4).add_to(m)
-
-        for _, row in grupo.iterrows():
-            folium.Marker([row['LAT'], row['LONG']], popup=row['COLABORADOR']).add_to(m)
-
-        folium.Marker(destino_final, popup="Destino Final", icon=folium.Icon(color="red")).add_to(m)
-
-        # Gerar KML
-        kml_root = etree.Element('kml', xmlns="http://www.opengis.net/kml/2.2")
-        document = etree.SubElement(kml_root, 'Document')
-
-        for _, row in grupo.iterrows():
-            placemark = etree.SubElement(document, 'Placemark')
-            name = etree.SubElement(placemark, 'name')
-            name.text = str(row['COLABORADOR'])
-            point = etree.SubElement(placemark, 'Point')
-            coordinates = etree.SubElement(point, 'coordinates')
-            coordinates.text = f"{row['LONG']},{row['LAT']},0"
-
-        placemark_destino = etree.SubElement(document, 'Placemark')
-        name_dest = etree.SubElement(placemark_destino, 'name')
-        name_dest.text = "Destino Final"
-        point_dest = etree.SubElement(placemark_destino, 'Point')
-        coordinates_dest = etree.SubElement(point_dest, 'coordinates')
-        coordinates_dest.text = f"{destino_final[1]},{destino_final[0]},0"
-
-        placemark_linha = etree.SubElement(document, 'Placemark')
-        name_linha = etree.SubElement(placemark_linha, 'name')
-        name_linha.text = "Caminho"
-        style = etree.SubElement(placemark_linha, 'Style')
-        linestyle = etree.SubElement(style, 'LineStyle')
-        etree.SubElement(linestyle, 'color').text = 'ff0000ff'
-        etree.SubElement(linestyle, 'width').text = '4'
-        linestring = etree.SubElement(placemark_linha, 'LineString')
-        etree.SubElement(linestring, 'extrude').text = '1'
-        etree.SubElement(linestring, 'tessellate').text = '1'
-        etree.SubElement(linestring, 'altitudeMode').text = 'clampToGround'
-        coord_elem = etree.SubElement(linestring, 'coordinates')
-        coord_elem.text = " ".join([f"{c[0]},{c[1]},0" for c in coords])
-
-        tree = etree.ElementTree(kml_root)
-        kml_bytes = io.BytesIO()
-        tree.write(kml_bytes, pretty_print=True, xml_declaration=True, encoding="UTF-8")
-
-        st.download_button(
-            label=f"Baixar rota {rota_nome}.kml",
-            data=kml_bytes.getvalue(),
-            file_name=f"rota_{rota_nome}.kml",
-            mime="application/vnd.google-earth.kml+xml"
-        )
-
-    st_folium(m, height=500, width=700)
 
 
 
