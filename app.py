@@ -59,7 +59,7 @@ destino_txt = st.text_input("Destino (LAT,LON)")
 
 if uploaded_file and destino_txt and st.button("Simular"):
     try:
-        df = pd.read_excel(uploaded_file, sheet_name="BD")
+        df = pd.read_excel(uploaded_file, sheet_name="BD", engine="openpyxl")
     except Exception as e:
         st.error(f"Erro ao ler planilha: {e}")
         st.stop()
@@ -69,12 +69,27 @@ if uploaded_file and destino_txt and st.button("Simular"):
         st.error("A planilha precisa ter as colunas: COLABORADOR, LAT, LONG")
         st.stop()
 
-    # Converte os dados em lista de pontos
+    # Converte os dados em lista de pontos com validação
     pontos = []
     for _, row in df.iterrows():
-        pontos.append({"nome": row["COLABORADOR"], "coord": [float(row["LAT"]), float(row["LONG"])]})
+        if pd.notna(row["LAT"]) and pd.notna(row["LONG"]):
+            try:
+                lat = float(row["LAT"])
+                lon = float(row["LONG"])
+                pontos.append({"nome": row["COLABORADOR"], "coord": [lat, lon]})
+            except ValueError:
+                st.warning(f"Coordenadas inválidas para {row['COLABORADOR']}")
+        else:
+            st.warning(f"Colaborador {row['COLABORADOR']} sem coordenadas válidas")
 
-    destino = [float(x) for x in destino_txt.split(",")]
+    # Valida destino
+    try:
+        destino = [float(x.strip()) for x in destino_txt.split(",")]
+    except Exception:
+        st.error("Destino inválido. Use o formato LAT,LON (ex: -3.119,-60.021)")
+        st.stop()
+
+    # Gera rotas
     rotas = criar_rotas(pontos, destino, capacidade)
     for r in rotas:
         for p in r["pontos"]: 
@@ -83,12 +98,20 @@ if uploaded_file and destino_txt and st.button("Simular"):
     st.subheader("Mapa das Rotas")
     m = folium.Map(location=destino, zoom_start=12)
     colors = ["red","blue","green","purple","orange","brown","pink","cyan"]
+
     for idx, rota in enumerate(rotas):
-        coords = [p["coord"] for p in rota["pontos"]] + [rota["destino"]]
+        coords = [p["coord"] for p in rota["pontos"] if None not in p["coord"]] + [rota["destino"]]
+        # Valida coordenadas antes de desenhar
+        if any(pd.isna(c[0]) or pd.isna(c[1]) for c in coords):
+            st.warning(f"Rota {rota['id']} contém coordenadas inválidas e não será desenhada.")
+            continue
         folium.PolyLine(coords, color=colors[idx%len(colors)], weight=4).add_to(m)
         for p in rota["pontos"]:
             folium.Marker(p["coord"], popup=p["nome"]).add_to(m)
+
     st_folium(m, width=700, height=500)
+
+
 
 
 
