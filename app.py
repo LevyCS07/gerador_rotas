@@ -63,8 +63,12 @@ def chamar_gemini(pontos, capacidade, destino, rotas_algoritmo):
         json=body)
     data = res.json()
     try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception: return data
+       if "candidates" in data and len(data["candidates"]) > 0:
+    parts = data["candidates"][0].get("content", {}).get("parts", [])
+    if parts and "text" in parts[0]:
+        return parts[0]["text"]
+return f"Erro na resposta do Gemini: {data}"
+
 
 # ---------------- UI ----------------
 st.title("RotaSmart AI 🚐")
@@ -96,4 +100,5 @@ if st.button("Simular"):
         for p in rota["pontos"]:
             folium.Marker(p["coord"], popup=p["nome"]).add_to(m)
     st_folium(m, width=700, height=500)
+
 
