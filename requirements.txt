@@ -1,6 +1,6 @@
 streamlit
+pandas
+openrouteservice
+lxml
 folium
 streamlit-folium
-shapely
-requests
-
