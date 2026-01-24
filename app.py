@@ -4,9 +4,10 @@ from streamlit_folium import st_folium
 import json, requests
 from shapely.geometry import Point, shape
 from math import sqrt
+import streamlit as st
 
 # Configuração Gemini
-GEMINI_API_KEY = "AIzaSyDlbF5vTLkpV2HbGQjjXFNJ7gwvgjINpw8"
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
 # Carregar bairros
@@ -95,3 +96,4 @@ if st.button("Simular"):
         for p in rota["pontos"]:
             folium.Marker(p["coord"], popup=p["nome"]).add_to(m)
     st_folium(m, width=700, height=500)
+
