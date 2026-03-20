@@ -62,12 +62,11 @@ def otimizar_rotas(matrix, num_vehicles, vehicle_capacities, demands, max_time=4
 st.sidebar.header("📂 Upload")
 xlsx = st.sidebar.file_uploader("Colaboradores", type=["xlsx"])
 
-ors_key = st.sidebar.text_input("🔑 ORS API Key", type="password")
 num_vehicles = st.sidebar.number_input("Quantidade de veículos", min_value=1, value=2)
 capacity = st.sidebar.number_input("Capacidade por veículo", min_value=1, value=10)
 max_time = st.sidebar.number_input("Tempo máximo (minutos)", min_value=10, value=80)
 
-if xlsx and ors_key:
+if xlsx:
     colaboradores = pd.read_excel(xlsx)
     st.write("### Dados carregados")
     st.dataframe(colaboradores)
@@ -76,7 +75,8 @@ if xlsx and ors_key:
     coords = [(float(row["LONG"]), float(row["LAT"])) for _, row in colaboradores.iterrows()]
     coords.insert(0, coords[0])  # depot = primeiro ponto
 
-    client = openrouteservice.Client(key=ors_key)
+    # Usa a chave guardada em Secrets
+    client = openrouteservice.Client(key=st.secrets["ORS_API_KEY"])
     matrix = calcular_matriz(coords, client)
 
     # Demanda: cada colaborador = 1
