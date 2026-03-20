@@ -5,7 +5,6 @@ from streamlit_folium import st_folium
 from folium.plugins import MarkerCluster
 import openrouteservice
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
-import io
 
 st.set_page_config(layout="wide", page_title="Otimização de Rotas com ORS")
 
@@ -62,8 +61,11 @@ def otimizar_rotas(matrix, num_vehicles, vehicle_capacities, demands, max_time=4
 st.sidebar.header("📂 Upload")
 xlsx = st.sidebar.file_uploader("Colaboradores", type=["xlsx"])
 
-num_vehicles = st.sidebar.number_input("Quantidade de veículos", min_value=1, value=2)
-capacity = st.sidebar.number_input("Capacidade por veículo", min_value=1, value=10)
+# Entrada de capacidades heterogêneas
+capacities_input = st.sidebar.text_input("Capacidades dos veículos (separadas por vírgula)", "10,20,15")
+vehicle_capacities = [int(x.strip()) for x in capacities_input.split(",") if x.strip().isdigit()]
+num_vehicles = len(vehicle_capacities)
+
 max_time = st.sidebar.number_input("Tempo máximo (minutos)", min_value=10, value=80)
 
 if xlsx:
@@ -81,13 +83,12 @@ if xlsx:
 
     # Demanda: cada colaborador = 1
     demands = [0] + [1] * (len(coords) - 1)
-    vehicle_capacities = [capacity] * num_vehicles
 
     if st.sidebar.button("🚀 Otimizar distribuição"):
         rotas = otimizar_rotas(matrix, num_vehicles, vehicle_capacities, demands, max_time*60)
         st.write("### Rotas otimizadas")
         for i, rota in enumerate(rotas):
-            st.write(f"Veículo {i+1}: {rota}")
+            st.write(f"Veículo {i+1} (capacidade {vehicle_capacities[i]}): {rota}")
 
         # Mapa
         m = folium.Map(location=[-3.119, -60.021], zoom_start=12)
