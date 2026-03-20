@@ -2,122 +2,100 @@ import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
-import json
-from shapely.geometry import Point, shape
-from math import sqrt
-from pathlib import Path
+from folium.plugins import MarkerCluster
+import openrouteservice
+from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+import io
 
-# Carregar bairros (usando caminho relativo seguro)
-geojson_path = Path(__file__).parent / "BAIRROS_MANAUS.geojson"
-with open(geojson_path, encoding="utf-8") as f:
-    bairros_geo = json.load(f)
+st.set_page_config(layout="wide", page_title="Otimização de Rotas com ORS")
 
-BAIRROS = [{"nome": feat["properties"].get("NOME") or feat["properties"].get("bairro"),
-            "shape": shape(feat["geometry"])} for feat in bairros_geo["features"]]
+# -----------------------------
+# Funções auxiliares
+# -----------------------------
+def calcular_matriz(coords, client):
+    """Calcula matriz de tempo usando ORS"""
+    matrix = client.distance_matrix(coords, profile='driving-car', metrics=["duration"])["durations"]
+    return matrix
 
-CAP_MIN = {15: 11, 22: 16, 32: 23, 44: 32}
+def otimizar_rotas(matrix, num_vehicles, vehicle_capacities, demands, max_time=4800):
+    """Resolve VRP com capacidade e tempo máximo"""
+    depot = 0
+    manager = pywrapcp.RoutingIndexManager(len(matrix), num_vehicles, depot)
+    routing = pywrapcp.RoutingModel(manager)
 
-def bairro_de_ponto(coord):
-    p = Point(coord[1], coord[0])
-    for b in BAIRROS:
-        if b["shape"].contains(p):
-            return b["nome"]
-    return "DESCONHECIDO"
+    def time_callback(from_index, to_index):
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        return int(matrix[from_node][to_node])
 
-def dist(a, b): 
-    return sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
+    transit_callback_index = routing.RegisterTransitCallback(time_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-def criar_rotas(pontos, destino, capacidade):
-    minimo = CAP_MIN[capacidade]
-    for p in pontos:
-        p["bairro"] = bairro_de_ponto(p["coord"])
-        p["usado"] = False
-    rotas, rota_id = [], 1
-    while any(not p["usado"] for p in pontos):
-        candidatos = [p for p in pontos if not p["usado"]]
-        start = max(candidatos, key=lambda p: dist(p["coord"], destino))
-        rota = {"id": f"Rota {rota_id}", "pontos": [start], "destino": destino,
-                "capacidade": capacidade, "bairro_base": start["bairro"]}
-        start["usado"] = True
-        while True:
-            livres = [p for p in pontos if not p["usado"]]
-            if not livres or len(rota["pontos"]) >= capacidade: 
-                break
-            melhor = min(livres, key=lambda p: dist(rota["pontos"][-1]["coord"], p["coord"]))
-            rota["pontos"].append(melhor)
-            melhor["usado"] = True
-        rotas.append(rota)
-        rota_id += 1
+    # Capacidade
+    def demand_callback(from_index):
+        return demands[manager.IndexToNode(from_index)]
+    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+    routing.AddDimensionWithCapacity(demand_callback_index, 0, vehicle_capacities, True, "Capacity")
+
+    # Tempo máximo
+    routing.AddDimension(transit_callback_index, 0, max_time, True, "Time")
+
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+
+    solution = routing.SolveWithParameters(search_parameters)
+    rotas = []
+    if solution:
+        for v in range(num_vehicles):
+            index = routing.Start(v)
+            plan = []
+            while not routing.IsEnd(index):
+                plan.append(manager.IndexToNode(index))
+                index = solution.Value(routing.NextVar(index))
+            plan.append(manager.IndexToNode(index))
+            rotas.append(plan)
     return rotas
 
-# ---------------- UI ----------------
-st.title("RotaSmart AI 🚐")
+# -----------------------------
+# Upload de dados
+# -----------------------------
+st.sidebar.header("📂 Upload")
+xlsx = st.sidebar.file_uploader("Colaboradores", type=["xlsx"])
 
-uploaded_file = st.file_uploader("Envie sua planilha LISTA.xlsx", type=["xlsx"])
-capacidade = st.selectbox("Capacidade", [15,22,32,44])
-destino_txt = st.text_input("Destino (LAT,LON)")
+ors_key = st.sidebar.text_input("🔑 ORS API Key", type="password")
+num_vehicles = st.sidebar.number_input("Quantidade de veículos", min_value=1, value=2)
+capacity = st.sidebar.number_input("Capacidade por veículo", min_value=1, value=10)
+max_time = st.sidebar.number_input("Tempo máximo (minutos)", min_value=10, value=80)
 
-if uploaded_file and destino_txt and st.button("Simular"):
-    try:
-        df = pd.read_excel(uploaded_file, sheet_name="BD", engine="openpyxl")
-    except Exception as e:
-        st.error(f"Erro ao ler planilha: {e}")
-        st.stop()
+if xlsx and ors_key:
+    colaboradores = pd.read_excel(xlsx)
+    st.write("### Dados carregados")
+    st.dataframe(colaboradores)
 
-    if not {"COLABORADOR","LAT","LONG"}.issubset(df.columns):
-        st.error("A planilha precisa ter as colunas: COLABORADOR, LAT, LONG")
-        st.stop()
+    # Coordenadas no formato ORS (lon, lat)
+    coords = [(float(row["LONG"]), float(row["LAT"])) for _, row in colaboradores.iterrows()]
+    coords.insert(0, coords[0])  # depot = primeiro ponto
 
-    pontos = []
-    faltando = []
-    for _, row in df.iterrows():
-        if pd.notna(row["LAT"]) and pd.notna(row["LONG"]):
-            try:
-                lat = float(row["LAT"])
-                lon = float(row["LONG"])
-                pontos.append({"nome": row["COLABORADOR"], "coord": [lat, lon]})
-            except ValueError:
-                faltando.append(row["COLABORADOR"])
-        else:
-            faltando.append(row["COLABORADOR"])
+    client = openrouteservice.Client(key=ors_key)
+    matrix = calcular_matriz(coords, client)
 
-    # Corrige erro do join: converte todos para string e ignora NaN
-    if faltando:
-        nomes_invalidos = [str(x) for x in faltando if pd.notna(x)]
-        if nomes_invalidos:
-            st.warning("Colaboradores sem coordenadas válidas: " + ", ".join(nomes_invalidos))
+    # Demanda: cada colaborador = 1
+    demands = [0] + [1] * (len(coords) - 1)
+    vehicle_capacities = [capacity] * num_vehicles
 
-    try:
-        destino = [float(x.strip()) for x in destino_txt.split(",")]
-    except Exception:
-        st.error("Destino inválido. Use o formato LAT,LON (ex: -3.119,-60.021)")
-        st.stop()
+    if st.sidebar.button("🚀 Otimizar distribuição"):
+        rotas = otimizar_rotas(matrix, num_vehicles, vehicle_capacities, demands, max_time*60)
+        st.write("### Rotas otimizadas")
+        for i, rota in enumerate(rotas):
+            st.write(f"Veículo {i+1}: {rota}")
 
-    rotas = criar_rotas(pontos, destino, capacidade)
-    for r in rotas:
-        for p in r["pontos"]: 
-            p.pop("usado", None)
-
-    st.subheader("Mapa das Rotas")
-    m = folium.Map(location=destino, zoom_start=12)
-    colors = ["red","blue","green","purple","orange","brown","pink","cyan"]
-    for idx, rota in enumerate(rotas):
-        coords = [p["coord"] for p in rota["pontos"]] + [rota["destino"]]
-        folium.PolyLine(coords, color=colors[idx%len(colors)], weight=4).add_to(m)
-        for p in rota["pontos"]:
-            folium.Marker(p["coord"], popup=p["nome"]).add_to(m)
-    st_folium(m, width=700, height=500)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        # Mapa
+        m = folium.Map(location=[-3.119, -60.021], zoom_start=12)
+        cluster = MarkerCluster().add_to(m)
+        for _, row in colaboradores.iterrows():
+            folium.Marker(
+                location=[row["LAT"], row["LONG"]],
+                popup=row["COLABORADORES"],
+                icon=folium.Icon(color="blue")
+            ).add_to(cluster)
+        st_folium(m, width=1200, height=700)
