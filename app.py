@@ -61,9 +61,15 @@ def otimizar_rotas(matrix, num_vehicles, vehicle_capacities, demands, max_time=4
 st.sidebar.header("📂 Upload")
 xlsx = st.sidebar.file_uploader("Colaboradores", type=["xlsx"])
 
-# Entrada de capacidades heterogêneas
-capacities_input = st.sidebar.text_input("Capacidades dos veículos (separadas por vírgula)", "10,20,15")
-vehicle_capacities = [int(x.strip()) for x in capacities_input.split(",") if x.strip().isdigit()]
+# Entrada de veículos heterogêneos com quantidade
+capacities_input = st.sidebar.text_input("Veículos (ex: 10x2,20x1,15x3)", "10x2,20x1,15x3")
+
+vehicle_capacities = []
+for item in capacities_input.split(","):
+    if "x" in item:
+        cap, qtd = item.split("x")
+        vehicle_capacities.extend([int(cap.strip())] * int(qtd.strip()))
+
 num_vehicles = len(vehicle_capacities)
 
 max_time = st.sidebar.number_input("Tempo máximo (minutos)", min_value=10, value=80)
